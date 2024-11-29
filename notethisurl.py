@@ -1,10 +1,8 @@
 import argparse
 import json
 import os
-from datetime import datetime, timezone
-from pytz import timezone as pytz_timezone
+from datetime import datetime, timezone  # Correct timezone import
 from github import Github
-from github.GithubException import GithubException
 from collections import Counter
 from tabulate import tabulate  # For pretty table display
 
@@ -105,12 +103,7 @@ def save_bookmarks(file_path, bookmarks):
         json.dump(bookmarks, file, indent=4)
 
 # Function to add a new bookmark
-def add_bookmark(bookmark_url, tags, bookmarks):
-    # Check if bookmark already exists
-    if any(bookmark['bookmarkURL'] == bookmark_url for bookmark in bookmarks):
-        print(f"Bookmark for URL '{bookmark_url}' already exists.")
-        return None  # No addition if URL exists
-    
+def add_bookmark(bookmark_url, tags):
     bookmark = {
         "bookmarkURL": bookmark_url,
         "tags": tags,
@@ -120,18 +113,26 @@ def add_bookmark(bookmark_url, tags, bookmarks):
 
 # Function to push changes to GitHub
 def push_to_github(config, file_path):
-    g = Github(config["GITHUB_TOKEN"])
-    repo = g.get_repo(config["GITHUB_REPO"])
+    g = Github(config["GITHUB_TOKEN"])  # Authenticate using the GitHub token
+    repo = g.get_repo(config["GITHUB_REPO"])  # Get the specified repository
+    
     with open(file_path, "r") as file:
-        content = file.read()
+        content = file.read()  # Read the contents of the local bookmarks file
+    
     try:
-        # Check if file exists in the repo
+        # Try to fetch the existing file from the repository
         contents = repo.get_contents(config["FILENAME"])
+        # If file exists, update it
         repo.update_file(contents.path, "Update bookmarks", content, contents.sha)
-    except GithubException as e:
-        print(f"GitHub error occurred: {e}")
+        print(f"Updated file {config['FILENAME']} in the GitHub repo.")
     except Exception as e:
-        print(f"An unexpected error occurred: {e}")
+        # If file doesn't exist, create it
+        if "404" in str(e):
+            print(f"File {config['FILENAME']} not found, creating a new file.")
+            repo.create_file(config["FILENAME"], "Add bookmarks", content)
+            print(f"Created file {config['FILENAME']} in the GitHub repo.")
+        else:
+            print(f"GitHub error occurred: {e}")
 
 # Function to list tags sorted by frequency
 def list_tags(bookmarks):
@@ -144,16 +145,16 @@ def list_tags(bookmarks):
 # Function to list URLs in a table
 def list_urls(bookmarks, tz_name):
     try:
-        tz = pytz_timezone(tz_name)  # Load user-configured timezone
+        tz = timezone(tz_name)  # Load user-configured timezone
     except Exception as e:
         print(f"Error: Invalid timezone '{tz_name}'. Falling back to UTC.")
-        tz = pytz_timezone(DEFAULT_TIMEZONE)
+        tz = timezone("UTC")
 
     table = []
     for bookmark in bookmarks:
         # Convert UTC time to user-configured timezone
         utc_time = datetime.fromisoformat(bookmark["date"])
-        local_time = utc_time.replace(tzinfo=timezone.utc).astimezone(tz)
+        local_time = utc_time.replace(tzinfo=timezone("UTC")).astimezone(tz)
         table.append([
             local_time.strftime("%Y-%m-%d %H:%M:%S"),
             bookmark["bookmarkURL"],
@@ -198,19 +199,18 @@ def main():
 
     if args.command == "add":
         # Add a new bookmark
-        bookmark = add_bookmark(args.url, args.tags, bookmarks)
-        if bookmark:
-            bookmarks.append(bookmark)
-            save_bookmarks(file_path, bookmarks)
-            push_to_github(config, file_path)
-            print("Bookmark added and pushed to GitHub.")
+        bookmark = add_bookmark(args.url, args.tags)
+        bookmarks.append(bookmark)
+        save_bookmarks(file_path, bookmarks)
+        push_to_github(config, file_path)
+        print("Bookmark added and pushed to GitHub.")
 
     elif args.command == "tags":
-        # List tags sorted by frequency
+        # List tags by frequency
         list_tags(bookmarks)
 
     elif args.command == "urls":
-        # List URLs in a table with formatted datetime
+        # List URLs in a table format
         list_urls(bookmarks, config["TIMEZONE"])
 
 if __name__ == "__main__":
