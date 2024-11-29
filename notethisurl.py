@@ -1,10 +1,11 @@
 import argparse
 import json
 import os
-from datetime import datetime
-from pytz import timezone, utc
-from collections import Counter
+from datetime import datetime, timezone
+from pytz import timezone as pytz_timezone
 from github import Github
+from github.GithubException import GithubException
+from collections import Counter
 from tabulate import tabulate  # For pretty table display
 
 # Constants for default paths and values
@@ -14,25 +15,67 @@ CONFIG_FILE = os.path.join(CONFIG_DIR, "config.json")
 DEFAULT_FILENAME = "bookmarks.json"
 DEFAULT_TIMEZONE = "UTC"
 
-# Function to initialize the configuration
-def initialize_config():
+# Function to initialize the configuration (set up if missing or prompt to override)
+def initialize_config(force_setup=False):
     if not os.path.exists(CONFIG_DIR):
         os.makedirs(CONFIG_DIR)
         print(f"Created directory: {CONFIG_DIR}")
-    
-    if not os.path.exists(CONFIG_FILE):
-        # Create default configuration
+
+    # If config.json does not exist or force_setup is True, set up the config
+    if not os.path.exists(CONFIG_FILE) or force_setup:
+        print("No config file found. Let's set up the configuration.")
+        # Prompt user for required info
+        github_token = input("Enter your GitHub Personal Access Token: ")
+        github_repo = input("Enter the GitHub repository (e.g., username/repo_name): ")
+        timezone_choice = input(f"Enter your preferred timezone (default: {DEFAULT_TIMEZONE}): ") or DEFAULT_TIMEZONE
+        filename_choice = input(f"Enter the filename to save bookmarks (default: {DEFAULT_FILENAME}): ") or DEFAULT_FILENAME
+        
+        # Save the configuration to config.json
         config = {
-            "GITHUB_TOKEN": "your_github_personal_access_token",  # Replace later
-            "GITHUB_REPO": "username/repo_name",  # Replace later
-            "FILENAME": DEFAULT_FILENAME,
-            "TIMEZONE": DEFAULT_TIMEZONE
+            "GITHUB_TOKEN": github_token,
+            "GITHUB_REPO": github_repo,
+            "FILENAME": filename_choice,
+            "TIMEZONE": timezone_choice
         }
         with open(CONFIG_FILE, "w") as file:
             json.dump(config, file, indent=4)
-        print(f"Created default config file at: {CONFIG_FILE}")
+        print(f"Config file created at: {CONFIG_FILE}")
+        return True  # Indicate that the config was created
     else:
-        print(f"Config file already exists at: {CONFIG_FILE}")
+        # If config.json exists, check for required keys
+        with open(CONFIG_FILE, "r") as file:
+            config = json.load(file)
+        
+        # Check if all required keys are present in the config
+        required_keys = ["GITHUB_TOKEN", "GITHUB_REPO", "TIMEZONE"]
+        if all(key in config for key in required_keys):
+            return False  # Configuration exists and is valid, no need to overwrite
+        else:
+            print("Config file is missing some required keys.")
+            overwrite = input("Do you want to overwrite the existing configuration? (yes/no): ").strip().lower()
+            if overwrite != "yes":
+                print("Keeping the existing configuration.")
+                return False  # Don't overwrite, exit here
+
+        # If keys are missing, prompt to reconfigure
+        print("Let's reconfigure the setup.")
+        # Prompt user for new values (override existing values)
+        github_token = input(f"Enter your GitHub Personal Access Token (current: {config.get('GITHUB_TOKEN', 'Not set')}): ")
+        github_repo = input(f"Enter the GitHub repository (current: {config.get('GITHUB_REPO', 'Not set')}): ")
+        timezone_choice = input(f"Enter your preferred timezone (current: {config.get('TIMEZONE', DEFAULT_TIMEZONE)}): ") or config.get('TIMEZONE', DEFAULT_TIMEZONE)
+        filename_choice = input(f"Enter the filename to save bookmarks (current: {config.get('FILENAME', DEFAULT_FILENAME)}): ") or config.get('FILENAME', DEFAULT_FILENAME)
+        
+        # Save the updated configuration to config.json
+        config.update({
+            "GITHUB_TOKEN": github_token,
+            "GITHUB_REPO": github_repo,
+            "TIMEZONE": timezone_choice,
+            "FILENAME": filename_choice
+        })
+        with open(CONFIG_FILE, "w") as file:
+            json.dump(config, file, indent=4)
+        print(f"Config file updated at: {CONFIG_FILE}")
+        return True  # Indicate that the config was updated
 
 # Function to load the configuration
 def load_config():
@@ -46,9 +89,15 @@ def get_bookmarks_file_path(config):
 # Function to load existing bookmarks
 def load_bookmarks(file_path):
     if os.path.exists(file_path):
-        with open(file_path, "r") as file:
-            return json.load(file)
-    return []
+        try:
+            with open(file_path, "r") as file:
+                return json.load(file)
+        except json.JSONDecodeError:
+            print(f"Error: Invalid JSON in {file_path}. Initializing with an empty list.")
+            return []  # Return an empty list if JSON is invalid
+    else:
+        print(f"{file_path} not found. Initializing with an empty list.")
+        return []  # Return an empty list if the file doesn't exist
 
 # Function to save bookmarks
 def save_bookmarks(file_path, bookmarks):
@@ -56,11 +105,16 @@ def save_bookmarks(file_path, bookmarks):
         json.dump(bookmarks, file, indent=4)
 
 # Function to add a new bookmark
-def add_bookmark(bookmark_url, tags):
+def add_bookmark(bookmark_url, tags, bookmarks):
+    # Check if bookmark already exists
+    if any(bookmark['bookmarkURL'] == bookmark_url for bookmark in bookmarks):
+        print(f"Bookmark for URL '{bookmark_url}' already exists.")
+        return None  # No addition if URL exists
+    
     bookmark = {
         "bookmarkURL": bookmark_url,
         "tags": tags,
-        "date": datetime.utcnow().isoformat()
+        "date": datetime.now(timezone.utc).isoformat()
     }
     return bookmark
 
@@ -74,9 +128,10 @@ def push_to_github(config, file_path):
         # Check if file exists in the repo
         contents = repo.get_contents(config["FILENAME"])
         repo.update_file(contents.path, "Update bookmarks", content, contents.sha)
-    except:
-        # Create file if it doesn't exist
-        repo.create_file(config["FILENAME"], "Add bookmarks", content)
+    except GithubException as e:
+        print(f"GitHub error occurred: {e}")
+    except Exception as e:
+        print(f"An unexpected error occurred: {e}")
 
 # Function to list tags sorted by frequency
 def list_tags(bookmarks):
@@ -89,16 +144,16 @@ def list_tags(bookmarks):
 # Function to list URLs in a table
 def list_urls(bookmarks, tz_name):
     try:
-        tz = timezone(tz_name)  # Load user-configured timezone
+        tz = pytz_timezone(tz_name)  # Load user-configured timezone
     except Exception as e:
         print(f"Error: Invalid timezone '{tz_name}'. Falling back to UTC.")
-        tz = utc
+        tz = pytz_timezone(DEFAULT_TIMEZONE)
 
     table = []
     for bookmark in bookmarks:
         # Convert UTC time to user-configured timezone
         utc_time = datetime.fromisoformat(bookmark["date"])
-        local_time = utc_time.replace(tzinfo=utc).astimezone(tz)
+        local_time = utc_time.replace(tzinfo=timezone.utc).astimezone(tz)
         table.append([
             local_time.strftime("%Y-%m-%d %H:%M:%S"),
             bookmark["bookmarkURL"],
@@ -120,34 +175,43 @@ def main():
     subparsers.add_parser("tags", help="List tags sorted by frequency")
 
     # Sub-parser for "urls" command
-    subparsers.add_parser("urls", help="List URLs in a table")
+    subparsers.add_parser("urls", help="List saved URLs in a table")
+
+    # Sub-parser for "setup" command
+    setup_parser = subparsers.add_parser("setup", help="Set up or reconfigure the GitHub token and repo")
 
     args = parser.parse_args()
 
-    # Initialize and load configuration
-    initialize_config()
+    if args.command == "setup":
+        # Handle the setup command separately
+        if initialize_config(force_setup=True):
+            print("Setup complete. You can now use other commands like 'add', 'tags', or 'urls'.")
+            return  # Exit after setup completes
+
+    # Initialize and load configuration (if setup or config file is missing)
+    if initialize_config(force_setup=False):  # Ensure config is valid
+        print("Configuration already exists and is valid.")
+    
     config = load_config()
     file_path = get_bookmarks_file_path(config)
-    timezone_name = config.get("TIMEZONE", DEFAULT_TIMEZONE)
-
-    # Load bookmarks
     bookmarks = load_bookmarks(file_path)
 
     if args.command == "add":
         # Add a new bookmark
-        new_bookmark = add_bookmark(args.url, args.tags)
-        bookmarks.append(new_bookmark)
-        save_bookmarks(file_path, bookmarks)
-        push_to_github(config, file_path)
-        print(f"Bookmark added: {args.url}")
+        bookmark = add_bookmark(args.url, args.tags, bookmarks)
+        if bookmark:
+            bookmarks.append(bookmark)
+            save_bookmarks(file_path, bookmarks)
+            push_to_github(config, file_path)
+            print("Bookmark added and pushed to GitHub.")
+
     elif args.command == "tags":
-        # List tags
+        # List tags sorted by frequency
         list_tags(bookmarks)
+
     elif args.command == "urls":
-        # List URLs
-        list_urls(bookmarks, timezone_name)
-    else:
-        print("Error: Invalid command.")
+        # List URLs in a table with formatted datetime
+        list_urls(bookmarks, config["TIMEZONE"])
 
 if __name__ == "__main__":
     main()
