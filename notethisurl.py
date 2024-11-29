@@ -2,6 +2,7 @@ import argparse
 import json
 import os
 from datetime import datetime, timezone  # Correct timezone import
+import pytz
 from github import Github
 from collections import Counter
 from tabulate import tabulate  # For pretty table display
@@ -145,21 +146,22 @@ def list_tags(bookmarks):
 # Function to list URLs in a table
 def list_urls(bookmarks, tz_name):
     try:
-        tz = timezone(tz_name)  # Load user-configured timezone
-    except Exception as e:
+        tz = pytz.timezone(tz_name)  # Load user-configured timezone
+    except pytz.UnknownTimeZoneError:
         print(f"Error: Invalid timezone '{tz_name}'. Falling back to UTC.")
-        tz = timezone("UTC")
+        tz = pytz.utc  # Use UTC as fallback
 
     table = []
     for bookmark in bookmarks:
-        # Convert UTC time to user-configured timezone
+        # Convert UTC time to the user-configured timezone
         utc_time = datetime.fromisoformat(bookmark["date"])
-        local_time = utc_time.replace(tzinfo=timezone("UTC")).astimezone(tz)
+        local_time = utc_time.replace(tzinfo=pytz.utc).astimezone(tz)
         table.append([
             local_time.strftime("%Y-%m-%d %H:%M:%S"),
             bookmark["bookmarkURL"],
             bookmark["tags"]
         ])
+    
     print(tabulate(table, headers=["DateTime", "URL", "Tags"], tablefmt="grid"))
 
 # Main function
