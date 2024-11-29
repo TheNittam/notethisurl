@@ -109,8 +109,19 @@ def list_urls(bookmarks, tz_name):
 # Main function
 def main():
     parser = argparse.ArgumentParser(description="Manage bookmarks saved to a GitHub-hosted JSON file.")
-    parser.add_argument("url_or_type", help="URL to save or type of list (tags, urls)")
-    parser.add_argument("--tags", default="", help="Comma-separated tags for the URL")
+    subparsers = parser.add_subparsers(dest="command", required=True, help="Sub-command to run")
+
+    # Sub-parser for "add" command
+    add_parser = subparsers.add_parser("add", help="Add a new bookmark")
+    add_parser.add_argument("url", help="URL to save")
+    add_parser.add_argument("--tags", default="", help="Comma-separated tags for the URL")
+
+    # Sub-parser for "tags" command
+    subparsers.add_parser("tags", help="List tags sorted by frequency")
+
+    # Sub-parser for "urls" command
+    subparsers.add_parser("urls", help="List URLs in a table")
+
     args = parser.parse_args()
 
     # Initialize and load configuration
@@ -122,21 +133,21 @@ def main():
     # Load bookmarks
     bookmarks = load_bookmarks(file_path)
 
-    if args.url_or_type.startswith("http://") or args.url_or_type.startswith("https://"):
-        # If the input is a URL, save it as a bookmark
-        new_bookmark = add_bookmark(args.url_or_type, args.tags)
+    if args.command == "add":
+        # Add a new bookmark
+        new_bookmark = add_bookmark(args.url, args.tags)
         bookmarks.append(new_bookmark)
         save_bookmarks(file_path, bookmarks)
         push_to_github(config, file_path)
-        print(f"Bookmark added: {args.url_or_type}")
-    elif args.url_or_type == "tags":
+        print(f"Bookmark added: {args.url}")
+    elif args.command == "tags":
         # List tags
         list_tags(bookmarks)
-    elif args.url_or_type == "urls":
+    elif args.command == "urls":
         # List URLs
         list_urls(bookmarks, timezone_name)
     else:
-        print("Error: Invalid input. Provide a URL to save or use 'tags' or 'urls' to list.")
+        print("Error: Invalid command.")
 
 if __name__ == "__main__":
     main()
